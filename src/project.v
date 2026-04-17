@@ -1,12 +1,6 @@
-/*
- * Copyright (c) 2024 Your Name
- * SPDX-License-Identifier: Apache-2.0
- */
-
 `default_nettype none
-`timescale 1ns / 1ps
 
-module tt_um_neurospike (
+module tt_um_top (
     input  wire [7:0] ui_in,
     output reg  [7:0] uo_out,
     input  wire [7:0] uio_in,
@@ -17,58 +11,76 @@ module tt_um_neurospike (
     input  wire       rst_n
 );
 
-    reg [7:0] membrane = 0;
-    reg [7:0] threshold = 8'd20;
+    // -------------------------
+    // INPUTS
+    // -------------------------
+    wire sample_en = ui_in[0];
+    wire [7:0] sensor = uio_in;
 
-    // -----------------------------
-    // INPUT SIGNALS
-    // -----------------------------
-    wire stimulus  = ui_in[0];
-    wire inc_th    = ui_in[1];
-    wire dec_th    = ui_in[2];
-    wire reset_nrn = ui_in[3];
+    // -------------------------
+    // FEATURE ENGINE
+    // -------------------------
+    reg [7:0] prev;
+    reg [7:0] peak;
+    reg [7:0] avg;
 
-    // -----------------------------
-    // EXPLICIT SPIKE SIGNAL
-    // -----------------------------
-    wire spike;
-
-    assign spike = (membrane >= threshold);
+    wire [7:0] diff = (sensor > prev) ? (sensor - prev) : (prev - sensor);
 
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n || reset_nrn) begin
-            membrane <= 0;
-            threshold <= 8'd20;
-            uo_out <= 0;
-        end else if (ena) begin
+        if (!rst_n) begin
+            prev <= 0;
+            peak <= 0;
+            avg  <= 0;
+        end
+        else if (ena && sample_en) begin
+            prev <= sensor;
 
-            // Threshold control
-            if (inc_th) threshold <= threshold + 1;
-            if (dec_th) threshold <= threshold - 1;
+            avg <= (avg + sensor) >> 1;
 
-            // Leak (decay)
-            if (membrane > 0)
-                membrane <= membrane - 1;
-
-            // Input stimulus
-            if (stimulus)
-                membrane <= membrane + 3;
-
-            // Spike event (clean logic)
-            if (spike) begin
-                uo_out[0] <= 1;
-                membrane <= 0;
-            end else begin
-                uo_out[0] <= 0;
-            end
-
-            // Output membrane (upper bits)
-            uo_out[7:1] <= membrane[6:0];
+            if (sensor > peak)
+                peak <= sensor;
         end
     end
 
-    // Threshold output for debug
-    assign uio_out = threshold;
-    assign uio_oe  = 8'hFF;
+    // -------------------------
+    // CLASSIFIER ENGINE
+    // -------------------------
+    reg [1:0] state;
+
+    always @(*) begin
+        if (!rst_n)
+            state = 2'b00;
+        else if (peak < 40 && diff < 10)
+            state = 2'b00;   // CLEAN
+        else if (peak < 120)
+            state = 2'b01;   // WARNING
+        else
+            state = 2'b10;   // UNSAFE
+    end
+
+    // -------------------------
+    // DEBUG ENCODING (SYNTHESIZABLE)
+    // -------------------------
+    reg [1:0] state_dbg;
+
+    always @(*) begin
+        state_dbg = state;
+    end
+
+    // -------------------------
+    // OUTPUT
+    // -------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            uo_out <= 0;
+        end else begin
+            uo_out[1:0] <= state;      // real output
+            uo_out[3:2] <= state_dbg;  // debug mirror
+            uo_out[7:4] <= avg[3:0];   // optional activity monitor
+        end
+    end
+
+    assign uio_out = peak;
+    assign uio_oe  = 8'b0;
 
 endmodule
