@@ -2,47 +2,31 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
 
-
 @cocotb.test()
-async def test_neurospike_clean(dut):
-    """Stable NeuroSpike test for GitHub Actions"""
+async def water_test(dut):
 
-    dut._log.info("Starting NeuroSpike test")
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
 
-    # Start clock
-    clock = Clock(dut.clk, 20, units="ns")
-    cocotb.start_soon(clock.start())
-
-    # Reset
     dut.rst_n.value = 0
     dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
 
-    await ClockCycles(dut.clk, 5)
-
-    dut.rst_n.value = 1
     await ClockCycles(dut.clk, 2)
+    dut.rst_n.value = 1
 
-    # Run controlled stimulus
-    for i in range(15):
-        dut.ui_in.value = 0x01  # stimulus pulse
+    # CLEAN
+    for _ in range(5):
+        dut.uio_in.value = 20
+        dut.ui_in.value = 1
         await RisingEdge(dut.clk)
 
-        dut.ui_in.value = 0x00
+    # WARNING
+    for i in range(5):
+        dut.uio_in.value = 50 + i*10
         await RisingEdge(dut.clk)
 
+    # UNSAFE
+    for _ in range(5):
+        dut.uio_in.value = 200
         await RisingEdge(dut.clk)
-
-        membrane = int(dut.uo_out.value >> 1)
-        spike = int(dut.uo_out.value & 0x1)
-        threshold = int(dut.uio_out.value)
-
-        dut._log.info(
-            f"Cycle {i} | Membrane={membrane} | Spike={spike} | Threshold={threshold}"
-        )
-
-    # Small extra wait to ensure clean exit
-    await ClockCycles(dut.clk, 5)
-
-    dut._log.info("Test completed cleanly")
